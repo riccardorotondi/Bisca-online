@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Bisca",
+    "slug": "bisca-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "bisca",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#111827"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
