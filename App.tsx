@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
 import {
+  Animated,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -73,6 +74,14 @@ const AI_PLAY_DELAY_MS = 1100;
 const TRICK_REVEAL_MS = 2300;
 const LOBBY_PORT = 8787;
 const LOBBY_SESSION_KEY = 'biscaLobbySession';
+const CELEBRATION_PIECES = [
+  { left: '12%', delay: 0, color: '#f6c75a', size: 9 },
+  { left: '25%', delay: 220, color: '#ef4444', size: 7 },
+  { left: '38%', delay: 80, color: '#fff1ad', size: 8 },
+  { left: '52%', delay: 310, color: '#22c55e', size: 7 },
+  { left: '67%', delay: 120, color: '#f6c75a', size: 10 },
+  { left: '81%', delay: 260, color: '#38bdf8', size: 7 },
+];
 
 function getPublicEnv(name: string) {
   const maybeProcess = globalThis as unknown as {
@@ -1100,6 +1109,7 @@ export default function App() {
 
           {phase === 'matchOver' ? (
             <View style={styles.resultPanel}>
+              <VictoryCelebration />
               <Text style={styles.panelTitle}>{matchWinnerId === localPlayerId ? 'Hai vinto la partita' : `Vince ${matchWinnerId === null ? '-' : labelPlayer(matchWinnerId)}`}</Text>
               <Text style={styles.helperText}>
                 Ultima mano: {lastHandDamagedIds.length > 0 ? `${formatPenaltySummary()}.` : 'nessuna vita persa.'}
@@ -1198,6 +1208,71 @@ function getSeatPosition(index: number, total: number, isPhoneLayout: boolean): 
   const positions = isPhoneLayout ? PHONE_SEAT_POSITIONS : DESKTOP_SEAT_POSITIONS;
   const order = SEAT_ORDERS[Math.max(1, Math.min(total, 8))] ?? [0];
   return positions[order[index] ?? index] ?? positions[0];
+}
+
+function VictoryCelebration() {
+  const pulse = useRef(new Animated.Value(0)).current;
+  const float = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 850, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 850, useNativeDriver: true }),
+      ]),
+    );
+    const floatLoop = Animated.loop(
+      Animated.timing(float, { toValue: 1, duration: 1800, useNativeDriver: true }),
+    );
+
+    pulseLoop.start();
+    floatLoop.start();
+
+    return () => {
+      pulseLoop.stop();
+      floatLoop.stop();
+    };
+  }, [float, pulse]);
+
+  const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1.08] });
+  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.28, 0.68] });
+  const chipY = float.interpolate({ inputRange: [0, 1], outputRange: [26, -36] });
+  const chipRotate = float.interpolate({ inputRange: [0, 1], outputRange: ['-10deg', '18deg'] });
+
+  return (
+    <View pointerEvents="none" style={styles.victoryLayer}>
+      <Animated.View style={[styles.victoryGlow, { opacity: glowOpacity, transform: [{ scale: glowScale }] }]} />
+      <Animated.View style={[styles.victoryChip, styles.victoryChipLeft, { transform: [{ translateY: chipY }, { rotate: chipRotate }] }]}>
+        <Text style={styles.victoryChipText}>★</Text>
+      </Animated.View>
+      <Animated.View style={[styles.victoryChip, styles.victoryChipRight, { transform: [{ translateY: chipY }, { rotate: chipRotate }] }]}>
+        <Text style={styles.victoryChipText}>♥</Text>
+      </Animated.View>
+      {CELEBRATION_PIECES.map((piece, index) => {
+        const delayed = Animated.modulo(Animated.add(float, piece.delay / 1800), 1);
+        const translateY = delayed.interpolate({ inputRange: [0, 1], outputRange: [14, -70] });
+        const opacity = delayed.interpolate({ inputRange: [0, 0.16, 0.82, 1], outputRange: [0, 1, 1, 0] });
+        const rotate = delayed.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '220deg'] });
+
+        return (
+          <Animated.View
+            key={index}
+            style={[
+              styles.confettiPiece,
+              {
+                width: piece.size,
+                height: piece.size * 1.6,
+                backgroundColor: piece.color,
+                left: piece.left as `${number}%`,
+                opacity,
+                transform: [{ translateY }, { rotate }],
+              },
+            ]}
+          />
+        );
+      })}
+    </View>
+  );
 }
 
 function PlayerSeat({
@@ -1503,6 +1578,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   panelTitle: {
+    position: 'relative',
+    zIndex: 1,
     color: '#fff7df',
     fontSize: 18,
     fontWeight: '900',
@@ -1557,6 +1634,8 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
   },
   actionButton: {
+    position: 'relative',
+    zIndex: 1,
     minHeight: 46,
     borderRadius: 8,
     paddingHorizontal: 16,
@@ -1577,6 +1656,8 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   secondaryButton: {
+    position: 'relative',
+    zIndex: 1,
     minHeight: 46,
     borderRadius: 8,
     paddingHorizontal: 16,
@@ -1592,6 +1673,8 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   helperText: {
+    position: 'relative',
+    zIndex: 1,
     color: '#d7e5dd',
     fontSize: 13,
     fontWeight: '600',
@@ -1656,12 +1739,58 @@ const styles = StyleSheet.create({
   },
   resultPanel: {
     position: 'relative',
+    overflow: 'hidden',
     borderRadius: 8,
     padding: 12,
     backgroundColor: 'rgba(8, 35, 31, 0.9)',
     gap: 10,
     borderWidth: 1,
     borderColor: 'rgba(246, 199, 90, 0.22)',
+  },
+  victoryLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    zIndex: 0,
+  },
+  victoryGlow: {
+    position: 'absolute',
+    left: '18%',
+    right: '18%',
+    top: 8,
+    bottom: 8,
+    borderRadius: 90,
+    backgroundColor: '#f6c75a',
+  },
+  victoryChip: {
+    position: 'absolute',
+    top: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#7f1d1d',
+    borderWidth: 3,
+    borderColor: '#f6c75a',
+  },
+  victoryChipLeft: {
+    left: 18,
+  },
+  victoryChipRight: {
+    right: 18,
+  },
+  victoryChipText: {
+    color: '#fff7df',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  confettiPiece: {
+    position: 'absolute',
+    bottom: 12,
+    borderRadius: 2,
   },
   handSection: {
     gap: 10,
