@@ -56,6 +56,7 @@ type OnlineSnapshot = {
   eliminatedPlayerIds: number[];
   lastHandDamagedIds: number[];
   lastHandPenaltiesByPlayerId: Record<number, number>;
+  handStarterId: number | null;
   handNumber: number;
   game: GameState;
   phase: Phase;
@@ -156,10 +157,20 @@ function clearLobbySession() {
   getLocalStorage()?.removeItem(LOBBY_SESSION_KEY);
 }
 
+function getBrowserDocument() {
+  return (globalThis as unknown as { document?: Document }).document;
+}
+
+function getBrowserWindow() {
+  return (globalThis as unknown as { addEventListener?: Window['addEventListener']; removeEventListener?: Window['removeEventListener'] });
+}
+
 export default function App() {
   const { width } = useWindowDimensions();
   const solverRef = useRef(new BiscaSolver());
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intentionalDisconnectRef = useRef(false);
   const stateRef = useRef<{
     game: GameState;
     phase: Phase;
@@ -180,6 +191,7 @@ export default function App() {
   const [eliminatedPlayerIds, setEliminatedPlayerIds] = useState<number[]>([]);
   const [lastHandDamagedIds, setLastHandDamagedIds] = useState<number[]>([]);
   const [lastHandPenaltiesByPlayerId, setLastHandPenaltiesByPlayerId] = useState<Record<number, number>>({});
+  const [handStarterId, setHandStarterId] = useState<number | null>(null);
   const [handNumber, setHandNumber] = useState(1);
   const [game, setGame] = useState<GameState>(() => createNewGame(MIN_PLAYERS));
   const [phase, setPhase] = useState<Phase>('setup');
@@ -254,6 +266,24 @@ export default function App() {
     return ids[Math.floor(Math.random() * ids.length)] ?? ids[0] ?? 0;
   }
 
+  function getNextStarterId(ids: number[], previousStarterId: number | null) {
+    if (ids.length === 0) {
+      return 0;
+    }
+
+    const sortedIds = [...ids].sort((a, b) => a - b);
+    if (previousStarterId === null) {
+      return getRandomPlayerId(sortedIds);
+    }
+
+    const currentIndex = sortedIds.indexOf(previousStarterId);
+    if (currentIndex >= 0) {
+      return sortedIds[(currentIndex + 1) % sortedIds.length] ?? sortedIds[0] ?? 0;
+    }
+
+    return sortedIds.find((id) => id > previousStarterId) ?? sortedIds[0] ?? 0;
+  }
+
   function formatPenaltySummary(ids = lastHandDamagedIds, penalties = lastHandPenaltiesByPlayerId) {
     return ids
       .map((id) => {
@@ -279,6 +309,7 @@ export default function App() {
       eliminatedPlayerIds,
       lastHandDamagedIds,
       lastHandPenaltiesByPlayerId,
+      handStarterId,
       handNumber,
       game,
       phase,
@@ -298,6 +329,7 @@ export default function App() {
     setEliminatedPlayerIds(snapshot.eliminatedPlayerIds);
     setLastHandDamagedIds(snapshot.lastHandDamagedIds);
     setLastHandPenaltiesByPlayerId(snapshot.lastHandPenaltiesByPlayerId ?? {});
+    setHandStarterId(snapshot.handStarterId ?? null);
     setHandNumber(snapshot.handNumber);
     setGame(snapshot.game);
     setPhase(snapshot.phase);
@@ -321,10 +353,16 @@ export default function App() {
       return;
     }
 
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
     }
+    intentionalDisconnectRef.current = false;
     setOnlineStatus(kind === 'resume' ? 'Rientro nella lobby...' : 'Connessione lobby...');
 
     const ws = new WebSocket(getLobbyWsUrl());
@@ -424,11 +462,38 @@ export default function App() {
     };
 
     ws.onclose = () => {
-      setOnlineStatus((status) => (status === 'Offline' ? status : 'Disconnesso dalla lobby'));
+      wsRef.current = null;
+      if (intentionalDisconnectRef.current) {
+        return;
+      }
+
+      setOnlineStatus('Connessione persa, provo a rientrare...');
+      const sessionToResume = readLobbySession();
+      if (!sessionToResume) {
+        return;
+      }
+
+      reconnectTimerRef.current = setTimeout(() => {
+        connectLobby('resume', sessionToResume.lobbyId, sessionToResume);
+      }, 900);
     };
   }
 
+  function reconnectIfNeeded() {
+    const sessionToResume = readLobbySession();
+    if (!sessionToResume || wsRef.current?.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    connectLobby('resume', sessionToResume.lobbyId, sessionToResume);
+  }
+
   function leaveLobby() {
+    intentionalDisconnectRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     sendOnline({ type: 'leave' });
     if (wsRef.current) {
       wsRef.current.onclose = null;
@@ -461,7 +526,27 @@ export default function App() {
       connectLobby('resume', resumableSession.lobbyId, resumableSession);
     }
 
-    return () => wsRef.current?.close();
+    const documentRef = getBrowserDocument();
+    const windowRef = getBrowserWindow();
+    const handleVisible = () => {
+      if (!documentRef || documentRef.visibilityState === 'visible') {
+        reconnectIfNeeded();
+      }
+    };
+
+    documentRef?.addEventListener('visibilitychange', handleVisible);
+    windowRef.addEventListener?.('focus', reconnectIfNeeded);
+    windowRef.addEventListener?.('pageshow', reconnectIfNeeded);
+
+    return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      documentRef?.removeEventListener('visibilitychange', handleVisible);
+      windowRef.removeEventListener?.('focus', reconnectIfNeeded);
+      windowRef.removeEventListener?.('pageshow', reconnectIfNeeded);
+      wsRef.current?.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -477,6 +562,7 @@ export default function App() {
     eliminatedPlayerIds,
     lastHandDamagedIds,
     lastHandPenaltiesByPlayerId,
+    handStarterId,
     handNumber,
     game,
     phase,
@@ -561,9 +647,11 @@ export default function App() {
     setEliminatedPlayerIds([]);
     setLastHandDamagedIds([]);
     setLastHandPenaltiesByPlayerId({});
+    setHandStarterId(null);
     setHandNumber(1);
     setMatchWinnerId(null);
     const starterId = getRandomPlayerId(ids);
+    setHandStarterId(starterId);
     setGame(createHand(ids, getCardsForHand(1), starterId));
     setPhase('setup');
     setCurrentBidderIndex(0);
@@ -575,7 +663,7 @@ export default function App() {
   }
 
   function beginHand(ids = activePlayerIds, nextHandNumber = handNumber) {
-    const starterId = getRandomPlayerId(ids);
+    const starterId = nextHandNumber <= 1 ? getRandomPlayerId(ids) : getNextStarterId(ids, handStarterId);
     const nextGame = createHand(ids, getCardsForHand(nextHandNumber), starterId);
 
     setActivePlayerIds(ids);
@@ -584,6 +672,7 @@ export default function App() {
       ...currentLives,
     }));
     setGame(nextGame);
+    setHandStarterId(starterId);
     setHandNumber(nextHandNumber);
     setPhase('bidding');
     setCurrentBidderIndex(0);
