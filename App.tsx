@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { StyleProp, ViewStyle } from 'react-native';
 import {
   Pressable,
   SafeAreaView,
@@ -6,6 +7,7 @@ import {
   StyleSheet,
   StatusBar,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -34,7 +36,7 @@ import {
 
 type Phase = 'setup' | 'bidding' | 'playing' | 'handOver' | 'matchOver';
 type OnlineRole = 'offline' | 'host' | 'guest';
-type LobbyMember = { clientId: string; playerId: number; isHost: boolean };
+type LobbyMember = { clientId: string; playerId: number; name?: string; isHost: boolean };
 type OnlineAction =
   | { kind: 'bid'; bid: number }
   | { kind: 'play'; card: Card; asZero: boolean }
@@ -46,6 +48,7 @@ type OnlineSnapshot = {
   activePlayerIds: number[];
   eliminatedPlayerIds: number[];
   lastHandDamagedIds: number[];
+  lastHandPenaltiesByPlayerId: Record<number, number>;
   handNumber: number;
   game: GameState;
   phase: Phase;
@@ -130,6 +133,7 @@ export default function App() {
   const [activePlayerIds, setActivePlayerIds] = useState<number[]>([0, 1]);
   const [eliminatedPlayerIds, setEliminatedPlayerIds] = useState<number[]>([]);
   const [lastHandDamagedIds, setLastHandDamagedIds] = useState<number[]>([]);
+  const [lastHandPenaltiesByPlayerId, setLastHandPenaltiesByPlayerId] = useState<Record<number, number>>({});
   const [handNumber, setHandNumber] = useState(1);
   const [game, setGame] = useState<GameState>(() => createNewGame(MIN_PLAYERS));
   const [phase, setPhase] = useState<Phase>('setup');
@@ -144,12 +148,15 @@ export default function App() {
   const [lobbyId, setLobbyId] = useState(initialLobbyId);
   const [lobbyMembers, setLobbyMembers] = useState<LobbyMember[]>([]);
   const [myPlayerId, setMyPlayerId] = useState(0);
+  const [playerName, setPlayerName] = useState('');
   const [onlineStatus, setOnlineStatus] = useState(initialLobbyId ? 'Link lobby rilevato' : 'Pronto per creare una partita online');
 
   const isOnline = onlineRole !== 'offline';
   const isHost = onlineRole === 'host';
   const isPhoneLayout = width < 430;
   const localPlayerId = isOnline ? myPlayerId : 0;
+  const trimmedPlayerName = playerName.trim();
+  const canEnterLobby = trimmedPlayerName.length > 0;
   const connectedPlayerIds = useMemo(
     () => lobbyMembers.map((member) => member.playerId).sort((a, b) => a - b),
     [lobbyMembers],
@@ -180,6 +187,11 @@ export default function App() {
 
   function labelPlayer(playerId: number) {
     if (isOnline) {
+      const member = lobbyMembers.find((candidate) => candidate.playerId === playerId);
+      if (member?.name) {
+        return playerId === localPlayerId ? `${member.name} (tu)` : member.name;
+      }
+
       if (playerId === localPlayerId) {
         return 'Tu';
       }
@@ -188,6 +200,20 @@ export default function App() {
     }
 
     return playerLabel(playerId);
+  }
+
+  function getRandomPlayerId(ids: number[]) {
+    return ids[Math.floor(Math.random() * ids.length)] ?? ids[0] ?? 0;
+  }
+
+  function formatPenaltySummary(ids = lastHandDamagedIds, penalties = lastHandPenaltiesByPlayerId) {
+    return ids
+      .map((id) => {
+        const penalty = penalties[id] ?? 1;
+        const lifeLabel = penalty === 1 ? '1 vita' : `${penalty} vite`;
+        return `${labelPlayer(id)} perde ${lifeLabel}`;
+      })
+      .join(', ');
   }
 
   function sendOnline(message: unknown) {
@@ -204,6 +230,7 @@ export default function App() {
       activePlayerIds,
       eliminatedPlayerIds,
       lastHandDamagedIds,
+      lastHandPenaltiesByPlayerId,
       handNumber,
       game,
       phase,
@@ -222,6 +249,7 @@ export default function App() {
     setActivePlayerIds(snapshot.activePlayerIds);
     setEliminatedPlayerIds(snapshot.eliminatedPlayerIds);
     setLastHandDamagedIds(snapshot.lastHandDamagedIds);
+    setLastHandPenaltiesByPlayerId(snapshot.lastHandPenaltiesByPlayerId ?? {});
     setHandNumber(snapshot.handNumber);
     setGame(snapshot.game);
     setPhase(snapshot.phase);
@@ -235,6 +263,11 @@ export default function App() {
   }
 
   function connectLobby(kind: 'create' | 'join', targetLobbyId = lobbyId) {
+    if (!canEnterLobby) {
+      setOnlineStatus('Scegli un nome prima di entrare');
+      return;
+    }
+
     wsRef.current?.close();
     setOnlineStatus('Connessione lobby...');
 
@@ -242,7 +275,7 @@ export default function App() {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      sendOnline(kind === 'create' ? { type: 'create' } : { type: 'join', lobbyId: targetLobbyId });
+      sendOnline(kind === 'create' ? { type: 'create', name: trimmedPlayerName } : { type: 'join', lobbyId: targetLobbyId, name: trimmedPlayerName });
     };
 
     ws.onmessage = (event) => {
@@ -322,10 +355,6 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (initialLobbyId) {
-      connectLobby('join', initialLobbyId);
-    }
-
     return () => wsRef.current?.close();
   }, []);
 
@@ -341,6 +370,7 @@ export default function App() {
     activePlayerIds,
     eliminatedPlayerIds,
     lastHandDamagedIds,
+    lastHandPenaltiesByPlayerId,
     handNumber,
     game,
     phase,
@@ -424,9 +454,11 @@ export default function App() {
     setActivePlayerIds(ids);
     setEliminatedPlayerIds([]);
     setLastHandDamagedIds([]);
+    setLastHandPenaltiesByPlayerId({});
     setHandNumber(1);
     setMatchWinnerId(null);
-    setGame(createHand(ids, getCardsForHand(1)));
+    const starterId = getRandomPlayerId(ids);
+    setGame(createHand(ids, getCardsForHand(1), starterId));
     setPhase('setup');
     setCurrentBidderIndex(0);
     setThinking(false);
@@ -437,12 +469,15 @@ export default function App() {
   }
 
   function beginHand(ids = activePlayerIds, nextHandNumber = handNumber) {
+    const starterId = getRandomPlayerId(ids);
+    const nextGame = createHand(ids, getCardsForHand(nextHandNumber), starterId);
+
     setActivePlayerIds(ids);
     setLivesByPlayerId((currentLives) => ({
       ...makeLives(ids, startingLives),
       ...currentLives,
     }));
-    setGame(createHand(ids, getCardsForHand(nextHandNumber)));
+    setGame(nextGame);
     setHandNumber(nextHandNumber);
     setPhase('bidding');
     setCurrentBidderIndex(0);
@@ -452,6 +487,7 @@ export default function App() {
     setSelectedJoker(null);
     setLastMove(null);
     setLastHandDamagedIds([]);
+    setLastHandPenaltiesByPlayerId({});
   }
 
   function resetMatch() {
@@ -567,13 +603,16 @@ export default function App() {
   }
 
   function concludeHand(finalGame: GameState) {
-    const damaged = finalGame.players
-      .filter((player) => player.bid < 0 || player.tricksWon !== player.bid)
-      .map((player) => player.id);
+    const penaltiesByPlayerId = Object.fromEntries(
+      finalGame.players
+        .map((player) => [player.id, player.bid < 0 ? 1 : Math.abs(player.bid - player.tricksWon)] as const)
+        .filter(([, penalty]) => penalty > 0),
+    );
+    const damaged = Object.keys(penaltiesByPlayerId).map(Number);
     const updatedLives = { ...livesByPlayerId };
 
     for (const playerId of damaged) {
-      updatedLives[playerId] = Math.max(0, (updatedLives[playerId] ?? startingLives) - 1);
+      updatedLives[playerId] = Math.max(0, (updatedLives[playerId] ?? startingLives) - (penaltiesByPlayerId[playerId] ?? 1));
     }
 
     const survivors = activePlayerIds.filter((id) => (updatedLives[id] ?? 0) > 0);
@@ -581,6 +620,7 @@ export default function App() {
 
     setLivesByPlayerId(updatedLives);
     setLastHandDamagedIds(damaged);
+    setLastHandPenaltiesByPlayerId(penaltiesByPlayerId);
     setEliminatedPlayerIds((ids) => [...new Set([...ids, ...newlyEliminated])]);
     setActivePlayerIds(survivors);
 
@@ -605,6 +645,15 @@ export default function App() {
   const currentTurnLabel = game.players.find((player) => player.id === game.currentPlayer)
     ? labelPlayer(game.currentPlayer)
     : '-';
+  const seatPlayerIds = useMemo(() => {
+    const playerIds = game.players.map((player) => player.id);
+    const localIndex = playerIds.indexOf(localPlayerId);
+    if (localIndex < 0) {
+      return playerIds;
+    }
+
+    return [...playerIds.slice(localIndex), ...playerIds.slice(0, localIndex)];
+  }, [game.players, localPlayerId]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -630,27 +679,45 @@ export default function App() {
           </Pressable>
         </View>
 
-        {phase !== 'setup' ? (
-          <View style={styles.scoreBand}>
-            {game.players.map((player) => (
-              <ScoreBlock
-                key={player.id}
-                label={labelPlayer(player.id)}
-                tricks={player.tricksWon}
-                bid={player.bid}
-                active={phase === 'playing' && game.currentPlayer === player.id && !trickPause}
-              />
-            ))}
-          </View>
-        ) : null}
-
-        <View style={[styles.table, isPhoneLayout && styles.tablePhone]}>
+        <View style={[styles.table, phase !== 'setup' && styles.tableInGame, isPhoneLayout && styles.tablePhone, phase !== 'setup' && isPhoneLayout && styles.tableInGamePhone]}>
           <View style={[styles.tableFelt, isPhoneLayout && styles.tableFeltPhone]} pointerEvents="none" />
+          {phase !== 'setup' ? (
+            <View style={styles.seatLayer} pointerEvents="none">
+              {seatPlayerIds.map((playerId, index) => {
+                const player = game.players.find((candidate) => candidate.id === playerId);
+                return (
+                  <PlayerSeat
+                    key={playerId}
+                    label={labelPlayer(playerId)}
+                    lives={livesByPlayerId[playerId] ?? 0}
+                    score={player ? (player.bid < 0 ? '-' : `${player.tricksWon}/${player.bid}`) : '-'}
+                    active={phase === 'playing' && game.currentPlayer === playerId && !trickPause}
+                    compact={isPhoneLayout}
+                    eliminated={!activePlayerIds.includes(playerId)}
+                    style={getSeatPosition(index, seatPlayerIds.length, isPhoneLayout)}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
           {phase === 'setup' && !isOnline && !initialLobbyId ? (
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Crea partita</Text>
-              <Text style={styles.helperText}>Apri un tavolo online e condividi il link con gli altri giocatori.</Text>
-              <Pressable accessibilityRole="button" onPress={() => connectLobby('create')} style={styles.actionButton}>
+              <TextInput
+                autoCapitalize="words"
+                maxLength={18}
+                onChangeText={setPlayerName}
+                placeholder="Il tuo nome"
+                placeholderTextColor="#7f8f99"
+                style={styles.nameInput}
+                value={playerName}
+              />
+              <Pressable
+                accessibilityRole="button"
+                disabled={!canEnterLobby}
+                onPress={() => connectLobby('create')}
+                style={[styles.actionButton, !canEnterLobby && styles.disabledButton]}
+              >
                 <Text style={styles.actionText}>Crea partita</Text>
               </Pressable>
             </View>
@@ -660,6 +727,17 @@ export default function App() {
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>{isHost ? 'Lobby host' : 'Lobby'}</Text>
               <Text style={styles.helperText}>{onlineStatus}</Text>
+              {!isOnline ? (
+                <TextInput
+                  autoCapitalize="words"
+                  maxLength={18}
+                  onChangeText={setPlayerName}
+                  placeholder="Il tuo nome"
+                  placeholderTextColor="#7f8f99"
+                  style={styles.nameInput}
+                  value={playerName}
+                />
+              ) : null}
               {lobbyId && isHost ? (
                 <Text selectable style={styles.inviteText}>
                   {getInviteLink(lobbyId)}
@@ -672,8 +750,13 @@ export default function App() {
               ) : null}
               <View style={styles.optionGrid}>
                 {initialLobbyId && !isOnline ? (
-                  <Pressable accessibilityRole="button" onPress={() => connectLobby('join', initialLobbyId)} style={styles.secondaryButton}>
-                    <Text style={styles.secondaryText}>Riprova ingresso</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!canEnterLobby}
+                    onPress={() => connectLobby('join', initialLobbyId)}
+                    style={[styles.actionButton, !canEnterLobby && styles.disabledButton]}
+                  >
+                    <Text style={styles.actionText}>Entra in lobby</Text>
                   </Pressable>
                 ) : null}
                 {isOnline ? (
@@ -765,18 +848,6 @@ export default function App() {
             </View>
           ) : null}
 
-          {phase !== 'setup' ? (
-            <View style={styles.matchPanel}>
-              <Text style={styles.sectionLabel}>Vite</Text>
-              <Text style={styles.helperText}>
-                {activePlayerIds.map((id) => `${labelPlayer(id)} ${livesByPlayerId[id] ?? 0}`).join(' · ')}
-              </Text>
-              {eliminatedPlayerIds.length > 0 ? (
-                <Text style={styles.helperText}>Eliminati: {eliminatedPlayerIds.map(labelPlayer).join(', ')}</Text>
-              ) : null}
-            </View>
-          ) : null}
-
           {phase === 'playing' || phase === 'handOver' || phase === 'matchOver' ? (
             <View style={styles.trickArea}>
               <Text style={styles.sectionLabel}>Tavolo</Text>
@@ -823,7 +894,7 @@ export default function App() {
               <Text style={styles.panelTitle}>Fine mano</Text>
               <Text style={styles.helperText}>
                 {lastHandDamagedIds.length > 0
-                  ? `${lastHandDamagedIds.map(labelPlayer).join(', ')} perdono una vita.`
+                  ? `${formatPenaltySummary()}.`
                   : 'Tutti hanno centrato la chiamata.'}
               </Text>
               <Pressable accessibilityRole="button" onPress={() => beginHand(activePlayerIds, handNumber + 1)} style={styles.actionButton}>
@@ -834,9 +905,9 @@ export default function App() {
 
           {phase === 'matchOver' ? (
             <View style={styles.resultPanel}>
-              <Text style={styles.panelTitle}>{matchWinnerId === 0 ? 'Hai vinto la partita' : `Vince ${matchWinnerId === null ? '-' : labelPlayer(matchWinnerId)}`}</Text>
+              <Text style={styles.panelTitle}>{matchWinnerId === localPlayerId ? 'Hai vinto la partita' : `Vince ${matchWinnerId === null ? '-' : labelPlayer(matchWinnerId)}`}</Text>
               <Text style={styles.helperText}>
-                Ultima mano: {lastHandDamagedIds.length > 0 ? `${lastHandDamagedIds.map(labelPlayer).join(', ')} hanno perso una vita.` : 'nessuna vita persa.'}
+                Ultima mano: {lastHandDamagedIds.length > 0 ? `${formatPenaltySummary()}.` : 'nessuna vita persa.'}
               </Text>
               <Pressable accessibilityRole="button" onPress={resetMatch} style={styles.actionButton}>
                 <Text style={styles.actionText}>Nuova partita</Text>
@@ -895,21 +966,69 @@ export default function App() {
   );
 }
 
-function ScoreBlock({
+const SEAT_ORDERS: Record<number, number[]> = {
+  1: [0],
+  2: [0, 4],
+  3: [0, 3, 5],
+  4: [0, 2, 4, 6],
+  5: [0, 2, 3, 5, 6],
+  6: [0, 1, 2, 4, 5, 6],
+  7: [0, 1, 2, 3, 4, 5, 6],
+  8: [0, 1, 2, 3, 4, 5, 6, 7],
+};
+
+const DESKTOP_SEAT_POSITIONS: ViewStyle[] = [
+  { bottom: 8, left: '50%', marginLeft: -58 },
+  { bottom: 54, right: 20 },
+  { top: 138, right: 20 },
+  { top: 46, right: '18%' },
+  { top: 22, left: '50%', marginLeft: -58 },
+  { top: 46, left: '18%' },
+  { top: 138, left: 20 },
+  { bottom: 54, left: 20 },
+];
+
+const PHONE_SEAT_POSITIONS: ViewStyle[] = [
+  { bottom: 6, left: '50%', marginLeft: -48 },
+  { bottom: 52, right: 8 },
+  { top: 118, right: 8 },
+  { top: 42, right: 16 },
+  { top: 16, left: '50%', marginLeft: -48 },
+  { top: 42, left: 16 },
+  { top: 118, left: 8 },
+  { bottom: 52, left: 8 },
+];
+
+function getSeatPosition(index: number, total: number, isPhoneLayout: boolean): StyleProp<ViewStyle> {
+  const positions = isPhoneLayout ? PHONE_SEAT_POSITIONS : DESKTOP_SEAT_POSITIONS;
+  const order = SEAT_ORDERS[Math.max(1, Math.min(total, 8))] ?? [0];
+  return positions[order[index] ?? index] ?? positions[0];
+}
+
+function PlayerSeat({
   label,
-  tricks,
-  bid,
+  lives,
+  score,
   active,
+  compact,
+  eliminated,
+  style,
 }: {
   label: string;
-  tricks: number;
-  bid: number;
+  lives: number;
+  score: string;
   active?: boolean;
+  compact?: boolean;
+  eliminated?: boolean;
+  style?: StyleProp<ViewStyle>;
 }) {
   return (
-    <View style={[styles.scoreBlock, active && styles.activeScoreBlock]}>
-      <Text style={styles.scoreLabel}>{label}</Text>
-      <Text style={styles.scoreValue}>{bid < 0 ? '-' : `${tricks}/${bid}`}</Text>
+    <View style={[styles.playerSeat, compact && styles.playerSeatPhone, active && styles.activePlayerSeat, eliminated && styles.eliminatedPlayerSeat, style]}>
+      <Text numberOfLines={1} style={styles.playerSeatName}>{label}</Text>
+      <View style={styles.playerSeatMeta}>
+        <Text style={styles.lifeBadge}>♥ {lives}</Text>
+        <Text style={styles.playerSeatScore}>{score}</Text>
+      </View>
     </View>
   );
 }
@@ -1047,11 +1166,21 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 8,
   },
+  tableInGame: {
+    minHeight: 390,
+    paddingTop: 108,
+    paddingBottom: 92,
+  },
   tablePhone: {
     borderRadius: 30,
     borderWidth: 4,
     padding: 11,
     gap: 11,
+  },
+  tableInGamePhone: {
+    minHeight: 350,
+    paddingTop: 88,
+    paddingBottom: 76,
   },
   tableFelt: {
     position: 'absolute',
@@ -1080,6 +1209,80 @@ const styles = StyleSheet.create({
     gap: 12,
     borderWidth: 1,
     borderColor: 'rgba(246, 199, 90, 0.22)',
+  },
+  nameInput: {
+    minHeight: 48,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    color: '#fff7df',
+    backgroundColor: '#0f1921',
+    borderWidth: 1,
+    borderColor: '#46535f',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  seatLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    zIndex: 3,
+  },
+  playerSeat: {
+    position: 'absolute',
+    width: 116,
+    minHeight: 48,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    backgroundColor: '#121a22',
+    borderWidth: 1,
+    borderColor: '#41505d',
+    shadowColor: '#000',
+    shadowOpacity: 0.34,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
+  },
+  playerSeatPhone: {
+    width: 96,
+    minHeight: 44,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+  },
+  activePlayerSeat: {
+    backgroundColor: '#7f1d1d',
+    borderColor: '#f6c75a',
+    shadowColor: '#f6c75a',
+    shadowOpacity: 0.38,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  eliminatedPlayerSeat: {
+    opacity: 0.48,
+  },
+  playerSeatName: {
+    color: '#fff7df',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  playerSeatMeta: {
+    marginTop: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  lifeBadge: {
+    color: '#ff6b6b',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  playerSeatScore: {
+    color: '#f6c75a',
+    fontSize: 12,
+    fontWeight: '900',
   },
   matchPanel: {
     position: 'relative',

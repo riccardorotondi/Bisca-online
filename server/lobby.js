@@ -42,6 +42,7 @@ function members(lobby) {
   return lobby.clients.map((client) => ({
     clientId: client.clientId,
     playerId: client.playerId,
+    name: client.name,
     isHost: client.clientId === lobby.hostClientId,
   }));
 }
@@ -50,13 +51,18 @@ function publishMembers(lobby) {
   broadcast(lobby, { type: 'members', lobbyId: lobby.id, members: members(lobby) });
 }
 
-function createLobby(ws) {
+function cleanName(name, fallback) {
+  const clean = String(name || '').trim().slice(0, 18);
+  return clean || fallback;
+}
+
+function createLobby(ws, name) {
   let id = makeLobbyId();
   while (lobbies.has(id)) {
     id = makeLobbyId();
   }
 
-  const client = { ws, clientId: randomUUID(), playerId: 0 };
+  const client = { ws, clientId: randomUUID(), playerId: 0, name: cleanName(name, 'Host') };
   const lobby = {
     id,
     hostClientId: client.clientId,
@@ -72,7 +78,7 @@ function createLobby(ws) {
   publishMembers(lobby);
 }
 
-function joinLobby(ws, lobbyId) {
+function joinLobby(ws, lobbyId, name) {
   const lobby = lobbies.get(String(lobbyId || '').toUpperCase());
   if (!lobby) {
     send(ws, { type: 'error', message: 'Lobby non trovata' });
@@ -87,7 +93,7 @@ function joinLobby(ws, lobbyId) {
   const playerId = lobby.nextPlayerId;
   lobby.nextPlayerId += 1;
 
-  const client = { ws, clientId: randomUUID(), playerId };
+  const client = { ws, clientId: randomUUID(), playerId, name: cleanName(name, `Giocatore ${playerId + 1}`) };
   ws.lobbyId = lobby.id;
   ws.clientId = client.clientId;
   lobby.clients.push(client);
@@ -108,12 +114,12 @@ function getLobbyFor(ws) {
 
 function handleMessage(ws, message) {
   if (message.type === 'create') {
-    createLobby(ws);
+    createLobby(ws, message.name);
     return;
   }
 
   if (message.type === 'join') {
-    joinLobby(ws, message.lobbyId);
+    joinLobby(ws, message.lobbyId, message.name);
     return;
   }
 

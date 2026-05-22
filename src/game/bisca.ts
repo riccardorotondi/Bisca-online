@@ -121,10 +121,13 @@ export function getCardsForHand(handNumber: number): number {
   return MAX_HAND_SIZE - cycleIndex;
 }
 
-export function createHand(playerIds: number[], cardsPerPlayer = MAX_HAND_SIZE): GameState {
+export function createHand(playerIds: number[], cardsPerPlayer = MAX_HAND_SIZE, startingPlayerId?: number): GameState {
   const safeCardsPerPlayer = normalizeCardsPerPlayer(cardsPerPlayer);
   const deck = shuffleDeck(createDeck());
-  const players: Player[] = playerIds.map((id, index) => ({
+  const starterIndex = startingPlayerId === undefined ? -1 : playerIds.indexOf(startingPlayerId);
+  const orderedPlayerIds =
+    starterIndex >= 0 ? [...playerIds.slice(starterIndex), ...playerIds.slice(0, starterIndex)] : playerIds;
+  const players: Player[] = orderedPlayerIds.map((id, index) => ({
     id,
     cards: deck.slice(index * safeCardsPerPlayer, (index + 1) * safeCardsPerPlayer),
     bid: -1,
