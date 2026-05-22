@@ -36,7 +36,14 @@ import {
 
 type Phase = 'setup' | 'bidding' | 'playing' | 'handOver' | 'matchOver';
 type OnlineRole = 'offline' | 'host' | 'guest';
-type LobbyMember = { clientId: string; playerId: number; name?: string; isHost: boolean };
+type LobbyMember = { clientId: string; playerId: number; name?: string; connected?: boolean; isHost: boolean };
+type LobbySession = {
+  lobbyId: string;
+  clientId: string;
+  playerId: number;
+  name: string;
+  role: OnlineRole;
+};
 type OnlineAction =
   | { kind: 'bid'; bid: number }
   | { kind: 'play'; card: Card; asZero: boolean }
@@ -64,6 +71,7 @@ const LIFE_OPTIONS = [1, 2, 3, 4, 5];
 const AI_PLAY_DELAY_MS = 1100;
 const TRICK_REVEAL_MS = 2300;
 const LOBBY_PORT = 8787;
+const LOBBY_SESSION_KEY = 'biscaLobbySession';
 
 function getPublicEnv(name: string) {
   const maybeProcess = globalThis as unknown as {
@@ -112,6 +120,42 @@ function getInviteLink(lobbyId: string) {
   return `${location.protocol}//${location.host}${location.pathname}?lobby=${lobbyId}`;
 }
 
+function getLocalStorage() {
+  return (globalThis as unknown as { localStorage?: Storage }).localStorage;
+}
+
+function readLobbySession(): LobbySession | null {
+  const raw = getLocalStorage()?.getItem(LOBBY_SESSION_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const session = JSON.parse(raw) as Partial<LobbySession>;
+    if (!session.lobbyId || !session.clientId || typeof session.playerId !== 'number') {
+      return null;
+    }
+
+    return {
+      lobbyId: session.lobbyId,
+      clientId: session.clientId,
+      playerId: session.playerId,
+      name: session.name || '',
+      role: session.role === 'host' ? 'host' : 'guest',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveLobbySession(session: LobbySession) {
+  getLocalStorage()?.setItem(LOBBY_SESSION_KEY, JSON.stringify(session));
+}
+
+function clearLobbySession() {
+  getLocalStorage()?.removeItem(LOBBY_SESSION_KEY);
+}
+
 export default function App() {
   const { width } = useWindowDimensions();
   const solverRef = useRef(new BiscaSolver());
@@ -127,6 +171,8 @@ export default function App() {
     trickPause: boolean;
   } | null>(null);
   const initialLobbyId = useMemo(getInitialLobbyId, []);
+  const savedLobbySession = useMemo(readLobbySession, []);
+  const resumableSession = savedLobbySession && (!initialLobbyId || savedLobbySession.lobbyId === initialLobbyId) ? savedLobbySession : null;
   const [playerCount, setPlayerCount] = useState(MIN_PLAYERS);
   const [startingLives, setStartingLives] = useState(3);
   const [livesByPlayerId, setLivesByPlayerId] = useState<Record<number, number>>({ 0: 3, 1: 3 });
@@ -145,11 +191,13 @@ export default function App() {
   const [lastMove, setLastMove] = useState<string | null>(null);
   const [matchWinnerId, setMatchWinnerId] = useState<number | null>(null);
   const [onlineRole, setOnlineRole] = useState<OnlineRole>('offline');
-  const [lobbyId, setLobbyId] = useState(initialLobbyId);
+  const [lobbyId, setLobbyId] = useState(initialLobbyId || resumableSession?.lobbyId || '');
   const [lobbyMembers, setLobbyMembers] = useState<LobbyMember[]>([]);
-  const [myPlayerId, setMyPlayerId] = useState(0);
-  const [playerName, setPlayerName] = useState('');
-  const [onlineStatus, setOnlineStatus] = useState(initialLobbyId ? 'Link lobby rilevato' : 'Pronto per creare una partita online');
+  const [myPlayerId, setMyPlayerId] = useState(resumableSession?.playerId ?? 0);
+  const [playerName, setPlayerName] = useState(resumableSession?.name ?? '');
+  const [onlineStatus, setOnlineStatus] = useState(
+    resumableSession ? 'Rientro nella lobby...' : initialLobbyId ? 'Link lobby rilevato' : 'Pronto per creare una partita online',
+  );
 
   const isOnline = onlineRole !== 'offline';
   const isHost = onlineRole === 'host';
@@ -262,19 +310,32 @@ export default function App() {
     setMatchWinnerId(snapshot.matchWinnerId);
   }
 
-  function connectLobby(kind: 'create' | 'join', targetLobbyId = lobbyId) {
-    if (!canEnterLobby) {
+  function connectLobby(kind: 'create' | 'join' | 'resume', targetLobbyId = lobbyId, session = resumableSession) {
+    if (kind !== 'resume' && !canEnterLobby) {
       setOnlineStatus('Scegli un nome prima di entrare');
       return;
     }
 
-    wsRef.current?.close();
-    setOnlineStatus('Connessione lobby...');
+    if (kind === 'resume' && !session) {
+      setOnlineStatus('Sessione lobby non trovata');
+      return;
+    }
+
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
+    setOnlineStatus(kind === 'resume' ? 'Rientro nella lobby...' : 'Connessione lobby...');
 
     const ws = new WebSocket(getLobbyWsUrl());
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (kind === 'resume') {
+        sendOnline({ type: 'resume', lobbyId: targetLobbyId, clientId: session?.clientId });
+        return;
+      }
+
       sendOnline(kind === 'create' ? { type: 'create', name: trimmedPlayerName } : { type: 'join', lobbyId: targetLobbyId, name: trimmedPlayerName });
     };
 
@@ -285,6 +346,13 @@ export default function App() {
         setOnlineRole('host');
         setLobbyId(message.lobbyId);
         setMyPlayerId(message.playerId);
+        saveLobbySession({
+          lobbyId: message.lobbyId,
+          clientId: message.clientId,
+          playerId: message.playerId,
+          name: trimmedPlayerName,
+          role: 'host',
+        });
         setOnlineStatus('Lobby creata');
         return;
       }
@@ -293,7 +361,32 @@ export default function App() {
         setOnlineRole('guest');
         setLobbyId(message.lobbyId);
         setMyPlayerId(message.playerId);
+        saveLobbySession({
+          lobbyId: message.lobbyId,
+          clientId: message.clientId,
+          playerId: message.playerId,
+          name: trimmedPlayerName,
+          role: 'guest',
+        });
         setOnlineStatus('Entrato in lobby');
+        return;
+      }
+
+      if (message.type === 'resumed') {
+        const role: OnlineRole = message.isHost ? 'host' : 'guest';
+        const restoredName = message.name ?? session?.name ?? '';
+        setOnlineRole(role);
+        setLobbyId(message.lobbyId);
+        setMyPlayerId(message.playerId);
+        setPlayerName(restoredName);
+        saveLobbySession({
+          lobbyId: message.lobbyId,
+          clientId: message.clientId,
+          playerId: message.playerId,
+          name: restoredName,
+          role,
+        });
+        setOnlineStatus('Rientrato in lobby');
         return;
       }
 
@@ -318,11 +411,15 @@ export default function App() {
         setOnlineRole('offline');
         setOnlineStatus('Lobby chiusa');
         setLobbyMembers([]);
+        clearLobbySession();
         return;
       }
 
       if (message.type === 'error') {
         setOnlineStatus(message.message ?? 'Errore lobby');
+        if (String(message.message ?? '').includes('scaduta') || String(message.message ?? '').includes('non trovata')) {
+          clearLobbySession();
+        }
       }
     };
 
@@ -332,12 +429,17 @@ export default function App() {
   }
 
   function leaveLobby() {
-    wsRef.current?.close();
+    sendOnline({ type: 'leave' });
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
     wsRef.current = null;
     setOnlineRole('offline');
     setLobbyMembers([]);
     setLobbyId('');
     setMyPlayerId(0);
+    clearLobbySession();
     setOnlineStatus('Pronto per creare una partita online');
   }
 
@@ -355,6 +457,10 @@ export default function App() {
   });
 
   useEffect(() => {
+    if (resumableSession) {
+      connectLobby('resume', resumableSession.lobbyId, resumableSession);
+    }
+
     return () => wsRef.current?.close();
   }, []);
 

@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 const PORT = Number(process.env.PORT || process.env.BISCA_LOBBY_PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'dist');
+const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 5 * 60 * 1000);
 const lobbies = new Map();
 
 const CONTENT_TYPES = {
@@ -27,7 +28,7 @@ function makeLobbyId() {
 }
 
 function send(ws, message) {
-  if (ws.readyState === ws.OPEN) {
+  if (ws?.readyState === ws.OPEN) {
     ws.send(JSON.stringify(message));
   }
 }
@@ -43,6 +44,7 @@ function members(lobby) {
     clientId: client.clientId,
     playerId: client.playerId,
     name: client.name,
+    connected: Boolean(client.ws),
     isHost: client.clientId === lobby.hostClientId,
   }));
 }
@@ -62,7 +64,7 @@ function createLobby(ws, name) {
     id = makeLobbyId();
   }
 
-  const client = { ws, clientId: randomUUID(), playerId: 0, name: cleanName(name, 'Host') };
+  const client = { ws, clientId: randomUUID(), playerId: 0, name: cleanName(name, 'Host'), cleanupTimer: null };
   const lobby = {
     id,
     hostClientId: client.clientId,
@@ -93,12 +95,48 @@ function joinLobby(ws, lobbyId, name) {
   const playerId = lobby.nextPlayerId;
   lobby.nextPlayerId += 1;
 
-  const client = { ws, clientId: randomUUID(), playerId, name: cleanName(name, `Giocatore ${playerId + 1}`) };
+  const client = { ws, clientId: randomUUID(), playerId, name: cleanName(name, `Giocatore ${playerId + 1}`), cleanupTimer: null };
   ws.lobbyId = lobby.id;
   ws.clientId = client.clientId;
   lobby.clients.push(client);
 
   send(ws, { type: 'joined', lobbyId: lobby.id, clientId: client.clientId, playerId });
+  if (lobby.snapshot) {
+    send(ws, { type: 'snapshot', payload: lobby.snapshot });
+  }
+  publishMembers(lobby);
+}
+
+function resumeLobby(ws, lobbyId, clientId) {
+  const lobby = lobbies.get(String(lobbyId || '').toUpperCase());
+  if (!lobby) {
+    send(ws, { type: 'error', message: 'Lobby non trovata' });
+    return;
+  }
+
+  const client = lobby.clients.find((candidate) => candidate.clientId === clientId);
+  if (!client) {
+    send(ws, { type: 'error', message: 'Sessione lobby scaduta' });
+    return;
+  }
+
+  if (client.cleanupTimer) {
+    clearTimeout(client.cleanupTimer);
+    client.cleanupTimer = null;
+  }
+
+  client.ws = ws;
+  ws.lobbyId = lobby.id;
+  ws.clientId = client.clientId;
+
+  send(ws, {
+    type: 'resumed',
+    lobbyId: lobby.id,
+    clientId: client.clientId,
+    playerId: client.playerId,
+    name: client.name,
+    isHost: client.clientId === lobby.hostClientId,
+  });
   if (lobby.snapshot) {
     send(ws, { type: 'snapshot', payload: lobby.snapshot });
   }
@@ -123,6 +161,11 @@ function handleMessage(ws, message) {
     return;
   }
 
+  if (message.type === 'resume') {
+    resumeLobby(ws, message.lobbyId, message.clientId);
+    return;
+  }
+
   const lobby = getLobbyFor(ws);
   if (!lobby) {
     send(ws, { type: 'error', message: 'Non sei in una lobby' });
@@ -142,7 +185,7 @@ function handleMessage(ws, message) {
 
   if (message.type === 'action') {
     const host = lobby.clients.find((client) => client.clientId === lobby.hostClientId);
-    if (!host) {
+    if (!host?.ws) {
       send(ws, { type: 'error', message: 'Host non disponibile' });
       return;
     }
@@ -155,16 +198,57 @@ function handleMessage(ws, message) {
       action: message.action,
     });
   }
+
+  if (message.type === 'leave') {
+    leave(ws, true);
+  }
 }
 
-function leave(ws) {
+function removeClient(lobby, client) {
+  lobby.clients = lobby.clients.filter((candidate) => candidate.clientId !== client.clientId);
+  if (client.cleanupTimer) {
+    clearTimeout(client.cleanupTimer);
+    client.cleanupTimer = null;
+  }
+}
+
+function leave(ws, explicit = false) {
   const lobby = getLobbyFor(ws);
   if (!lobby) {
     return;
   }
 
-  lobby.clients = lobby.clients.filter((client) => client.ws !== ws);
-  if (lobby.clients.length === 0 || ws.clientId === lobby.hostClientId) {
+  const client = lobby.clients.find((candidate) => candidate.clientId === ws.clientId);
+  if (!client) {
+    return;
+  }
+
+  if (explicit) {
+    removeClient(lobby, client);
+  } else {
+    client.ws = null;
+    if (client.cleanupTimer) {
+      clearTimeout(client.cleanupTimer);
+    }
+    client.cleanupTimer = setTimeout(() => {
+      const currentLobby = lobbies.get(lobby.id);
+      const currentClient = currentLobby?.clients.find((candidate) => candidate.clientId === client.clientId);
+      if (!currentLobby || !currentClient || currentClient.ws) {
+        return;
+      }
+
+      removeClient(currentLobby, currentClient);
+      if (currentLobby.clients.length === 0 || currentClient.clientId === currentLobby.hostClientId) {
+        broadcast(currentLobby, { type: 'closed' });
+        lobbies.delete(currentLobby.id);
+        return;
+      }
+
+      publishMembers(currentLobby);
+    }, RECONNECT_GRACE_MS);
+  }
+
+  if (lobby.clients.length === 0 || (explicit && ws.clientId === lobby.hostClientId)) {
     broadcast(lobby, { type: 'closed' });
     lobbies.delete(lobby.id);
     return;
