@@ -44,10 +44,10 @@ La repo include gia' un Blueprint Render in `render.yaml`.
 2. In Render crea un nuovo Blueprint e seleziona questa repo.
 3. Lascia il Blueprint path predefinito: `render.yaml`.
 4. Applica il Blueprint: Render creera' il servizio web `bisca-lobby`.
-5. Quando il deploy e' finito, copia l'URL pubblico mostrato da Render e apri `/health`, per esempio:
+5. Quando il deploy e' finito, copia l'URL pubblico mostrato da Render e apri `/healthz`, per esempio:
 
 ```text
-https://bisca-lobby.onrender.com/health
+https://bisca-lobby.onrender.com/healthz
 ```
 
 Se risponde con `{"ok":true,...}`, il server lobby e' online.
@@ -56,7 +56,7 @@ Configurazione inclusa:
 
 - Runtime: Docker
 - Dockerfile: `Dockerfile.lobby`
-- Health check: `/health`
+- Health check: `/healthz`
 - Porta: variabile `PORT` fornita da Render
 - Regione: `frankfurt`
 - Auto deploy: a ogni commit

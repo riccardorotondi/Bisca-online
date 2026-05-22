@@ -152,7 +152,7 @@ function leave(ws) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/health') {
+  if (req.url === '/health' || req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, lobbies: lobbies.size }));
     return;
