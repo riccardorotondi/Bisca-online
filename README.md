@@ -36,22 +36,41 @@ Poi crea una lobby dall'app e condividi il link generato.
 
 Per giocare davvero online il server lobby deve stare su un dominio pubblico HTTPS/WSS.
 
-1. Deploya il backend `server/lobby.js` su un servizio Node/Docker.
-   - Start command: `npm run lobby`
-   - Health check: `/health`
-   - Porta: usa la variabile `PORT` fornita dall'hosting
-   - Dockerfile: `Dockerfile.lobby`
+### Deploy su Render
 
-2. Prendi l'URL pubblico del backend e trasformalo in WebSocket:
+La repo include gia' un Blueprint Render in `render.yaml`.
+
+1. Pusha la repo su GitHub/GitLab.
+2. In Render crea un nuovo Blueprint e seleziona questa repo.
+3. Lascia il Blueprint path predefinito: `render.yaml`.
+4. Applica il Blueprint: Render creera' il servizio web `bisca-lobby`.
+5. Quando il deploy e' finito, copia l'URL pubblico mostrato da Render e apri `/health`, per esempio:
 
 ```text
-https://bisca-lobby.example.com -> wss://bisca-lobby.example.com
+https://bisca-lobby.onrender.com/health
+```
+
+Se risponde con `{"ok":true,...}`, il server lobby e' online.
+
+Configurazione inclusa:
+
+- Runtime: Docker
+- Dockerfile: `Dockerfile.lobby`
+- Health check: `/health`
+- Porta: variabile `PORT` fornita da Render
+- Regione: `frankfurt`
+- Auto deploy: a ogni commit
+
+2. Prendi l'URL pubblico effettivo del backend e trasformalo in WebSocket:
+
+```text
+https://bisca-lobby.onrender.com -> wss://bisca-lobby.onrender.com
 ```
 
 3. Crea un file `.env` nell'app:
 
 ```bash
-EXPO_PUBLIC_LOBBY_WS_URL=wss://bisca-lobby.example.com
+EXPO_PUBLIC_LOBBY_WS_URL=wss://bisca-lobby.onrender.com
 ```
 
 4. Riavvia Expo:
