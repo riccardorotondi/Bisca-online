@@ -3,9 +3,14 @@ FROM node:20-alpine
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
+COPY app.json tsconfig.json App.tsx ./
+COPY src ./src
 COPY server ./server
+
+RUN npm run build:web
+RUN npm prune --omit=dev
 
 ENV NODE_ENV=production
 ENV PORT=8787

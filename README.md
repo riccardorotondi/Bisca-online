@@ -18,13 +18,13 @@ npm run android
 npm run ios
 ```
 
-Senza Expo Go puoi giocare nel browser:
+Senza Expo Go puoi giocare nel browser in sviluppo:
 
 ```bash
 npm run web
 ```
 
-Per il multiplayer locale avvia anche il server lobby in un secondo terminale:
+Per il multiplayer locale in sviluppo avvia anche il server lobby in un secondo terminale:
 
 ```bash
 npm run lobby
@@ -32,9 +32,9 @@ npm run lobby
 
 Poi crea una lobby dall'app e condividi il link generato.
 
-## Multiplayer online
+## Pagina online sempre attiva
 
-Per giocare davvero online il server lobby deve stare su un dominio pubblico HTTPS/WSS.
+Il deploy Render serve sia la web app sia la lobby WebSocket dallo stesso dominio. In produzione apri direttamente l'URL Render dal browser, anche da telefono: l'host crea la partita dalla pagina iniziale, condivide il link lobby, e chi entra da link viene portato direttamente nella lobby.
 
 ### Deploy su Render
 
@@ -44,7 +44,8 @@ La repo include gia' un Blueprint Render in `render.yaml`.
 2. In Render crea un nuovo Blueprint e seleziona questa repo.
 3. Lascia il Blueprint path predefinito: `render.yaml`.
 4. Applica il Blueprint: Render creera' il servizio web `bisca-lobby`.
-5. Quando il deploy e' finito, copia l'URL pubblico mostrato da Render e apri `/healthz`, per esempio:
+5. Quando il deploy e' finito, apri l'URL pubblico mostrato da Render: quella e' la pagina di gioco online.
+6. Per controllare lo stato del servizio puoi aprire `/healthz`, per esempio:
 
 ```text
 https://bisca-lobby.onrender.com/healthz
@@ -56,35 +57,19 @@ Configurazione inclusa:
 
 - Runtime: Docker
 - Dockerfile: `Dockerfile.lobby`
+- Build web Expo servita dalla cartella `dist`
 - Health check: `/healthz`
 - Porta: variabile `PORT` fornita da Render
 - Regione: `frankfurt`
 - Auto deploy: a ogni commit
 
-2. Prendi l'URL pubblico effettivo del backend e trasformalo in WebSocket:
-
-```text
-https://bisca-lobby.onrender.com -> wss://bisca-lobby.onrender.com
-```
-
-3. Crea un file `.env` nell'app:
-
-```bash
-EXPO_PUBLIC_LOBBY_WS_URL=wss://bisca-lobby.onrender.com
-```
-
-4. Riavvia Expo:
-
-```bash
-npm run web
-```
-
-Da quel momento i link lobby generati dall'app possono essere aperti da altri giocatori online.
+In produzione non serve configurare `EXPO_PUBLIC_LOBBY_WS_URL`: se la pagina e' aperta in HTTPS, l'app usa automaticamente `wss://` sullo stesso dominio. In sviluppo locale puoi ancora usare `.env` per puntare a un backend specifico.
 
 ## Cosa c'e'
 
 - Tavolo da 2 a 8 giocatori.
-- Partita locale contro AI: tu sei il giocatore 1, gli altri posti sono gestiti dall'app.
+- Pagina iniziale online con creazione partita host.
+- Ingresso diretto in lobby quando apri un link invito.
 - Multiplayer con lobby WebSocket e invito tramite link.
 - Nella prima versione online l'host e' autorevole: crea la lobby, avvia la partita e sincronizza lo stato con gli invitati.
 - Vite configurabili prima di avviare la partita.

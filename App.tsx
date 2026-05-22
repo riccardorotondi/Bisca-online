@@ -6,6 +6,7 @@ import {
   StyleSheet,
   StatusBar,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { CardView } from './src/components/CardView';
@@ -89,8 +90,14 @@ function getLobbyWsUrl() {
   }
 
   const location = getBrowserLocation();
-  const host = location?.hostname || 'localhost';
-  return `ws://${host}:${LOBBY_PORT}`;
+  if (!location) {
+    return `ws://localhost:${LOBBY_PORT}`;
+  }
+
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  const host = isLocalHost ? `${location.hostname}:${LOBBY_PORT}` : location.host;
+  return `${protocol}//${host}`;
 }
 
 function getInviteLink(lobbyId: string) {
@@ -103,6 +110,7 @@ function getInviteLink(lobbyId: string) {
 }
 
 export default function App() {
+  const { width } = useWindowDimensions();
   const solverRef = useRef(new BiscaSolver());
   const wsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef<{
@@ -136,10 +144,11 @@ export default function App() {
   const [lobbyId, setLobbyId] = useState(initialLobbyId);
   const [lobbyMembers, setLobbyMembers] = useState<LobbyMember[]>([]);
   const [myPlayerId, setMyPlayerId] = useState(0);
-  const [onlineStatus, setOnlineStatus] = useState(initialLobbyId ? 'Link lobby rilevato' : 'Offline');
+  const [onlineStatus, setOnlineStatus] = useState(initialLobbyId ? 'Link lobby rilevato' : 'Pronto per creare una partita online');
 
   const isOnline = onlineRole !== 'offline';
   const isHost = onlineRole === 'host';
+  const isPhoneLayout = width < 430;
   const localPlayerId = isOnline ? myPlayerId : 0;
   const connectedPlayerIds = useMemo(
     () => lobbyMembers.map((member) => member.playerId).sort((a, b) => a - b),
@@ -296,7 +305,7 @@ export default function App() {
     setLobbyMembers([]);
     setLobbyId('');
     setMyPlayerId(0);
-    setOnlineStatus('Offline');
+    setOnlineStatus('Pronto per creare una partita online');
   }
 
   useEffect(() => {
@@ -600,11 +609,11 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.screen}>
-        <View style={styles.header}>
-          <View>
+      <ScrollView contentContainerStyle={[styles.screen, isPhoneLayout && styles.screenPhone]}>
+        <View style={[styles.header, isPhoneLayout && styles.headerPhone]}>
+          <View style={styles.headerText}>
             <Text style={styles.kicker}>Bisca</Text>
-            <Text style={styles.title}>
+            <Text style={[styles.title, isPhoneLayout && styles.titlePhone]}>
               {phase === 'setup'
                 ? 'Nuovo tavolo'
                 : phase === 'bidding'
@@ -621,36 +630,50 @@ export default function App() {
           </Pressable>
         </View>
 
-        <View style={styles.scoreBand}>
-          {game.players.map((player) => (
-            <ScoreBlock
-              key={player.id}
-              label={labelPlayer(player.id)}
-              tricks={player.tricksWon}
-              bid={player.bid}
-              active={phase === 'playing' && game.currentPlayer === player.id && !trickPause}
-            />
-          ))}
-        </View>
+        {phase !== 'setup' ? (
+          <View style={styles.scoreBand}>
+            {game.players.map((player) => (
+              <ScoreBlock
+                key={player.id}
+                label={labelPlayer(player.id)}
+                tricks={player.tricksWon}
+                bid={player.bid}
+                active={phase === 'playing' && game.currentPlayer === player.id && !trickPause}
+              />
+            ))}
+          </View>
+        ) : null}
 
-        <View style={styles.table}>
-          {phase === 'setup' ? (
+        <View style={[styles.table, isPhoneLayout && styles.tablePhone]}>
+          <View style={[styles.tableFelt, isPhoneLayout && styles.tableFeltPhone]} pointerEvents="none" />
+          {phase === 'setup' && !isOnline && !initialLobbyId ? (
             <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Multiplayer</Text>
+              <Text style={styles.panelTitle}>Crea partita</Text>
+              <Text style={styles.helperText}>Apri un tavolo online e condividi il link con gli altri giocatori.</Text>
+              <Pressable accessibilityRole="button" onPress={() => connectLobby('create')} style={styles.actionButton}>
+                <Text style={styles.actionText}>Crea partita</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {phase === 'setup' && (isOnline || initialLobbyId) ? (
+            <View style={styles.panel}>
+              <Text style={styles.panelTitle}>{isHost ? 'Lobby host' : 'Lobby'}</Text>
               <Text style={styles.helperText}>{onlineStatus}</Text>
-              {lobbyId ? <Text style={styles.inviteText}>{getInviteLink(lobbyId)}</Text> : null}
+              {lobbyId && isHost ? (
+                <Text selectable style={styles.inviteText}>
+                  {getInviteLink(lobbyId)}
+                </Text>
+              ) : null}
               {lobbyMembers.length > 0 ? (
                 <Text style={styles.helperText}>
                   In lobby: {lobbyMembers.map((member) => labelPlayer(member.playerId)).join(', ')}
                 </Text>
               ) : null}
               <View style={styles.optionGrid}>
-                <Pressable accessibilityRole="button" onPress={() => connectLobby('create')} style={styles.secondaryButton}>
-                  <Text style={styles.secondaryText}>Crea lobby</Text>
-                </Pressable>
-                {initialLobbyId ? (
+                {initialLobbyId && !isOnline ? (
                   <Pressable accessibilityRole="button" onPress={() => connectLobby('join', initialLobbyId)} style={styles.secondaryButton}>
-                    <Text style={styles.secondaryText}>Entra dal link</Text>
+                    <Text style={styles.secondaryText}>Riprova ingresso</Text>
                   </Pressable>
                 ) : null}
                 {isOnline ? (
@@ -662,44 +685,36 @@ export default function App() {
             </View>
           ) : null}
 
-          {phase === 'setup' ? (
+          {phase === 'setup' && isHost ? (
             <View style={styles.panel}>
-              <Text style={styles.panelTitle}>Giocatori</Text>
-              <View style={styles.optionGrid}>
-                {PLAYER_OPTIONS.map((count) => (
-                  <Pressable
-                    key={count}
-                    accessibilityRole="button"
-                    onPress={() => prepareTable(count)}
-                    style={[styles.smallButton, playerCount === count && styles.selectedButton]}
-                  >
-                    <Text style={styles.smallButtonText}>{count}</Text>
-                  </Pressable>
-                ))}
-              </View>
               <Text style={styles.panelTitle}>Vite</Text>
               <View style={styles.optionGrid}>
                 {LIFE_OPTIONS.map((lives) => (
                   <Pressable
                     key={lives}
                     accessibilityRole="button"
-                    onPress={() => prepareTable(playerCount, lives)}
+                    onPress={() => prepareTable(Math.max(connectedPlayerIds.length, MIN_PLAYERS), lives)}
                     style={[styles.smallButton, startingLives === lives && styles.selectedButton]}
                   >
-                    <Text style={styles.smallButtonText}>{lives}</Text>
+                    <Text style={[styles.smallButtonText, startingLives === lives && styles.selectedButtonText]}>{lives}</Text>
                   </Pressable>
                 ))}
               </View>
               <Pressable
                 accessibilityRole="button"
-                disabled={isOnline && (!isHost || connectedPlayerIds.length < MIN_PLAYERS)}
-                onPress={() => beginHand(isOnline ? connectedPlayerIds : activePlayerIds, 1)}
-                style={[styles.actionButton, isOnline && (!isHost || connectedPlayerIds.length < MIN_PLAYERS) && styles.disabledButton]}
+                disabled={connectedPlayerIds.length < MIN_PLAYERS}
+                onPress={() => beginHand(connectedPlayerIds, 1)}
+                style={[styles.actionButton, connectedPlayerIds.length < MIN_PLAYERS && styles.disabledButton]}
               >
-                <Text style={styles.actionText}>
-                  {isOnline ? `Avvia online (${connectedPlayerIds.length})` : 'Avvia partita'}
-                </Text>
+                <Text style={styles.actionText}>Avvia online ({connectedPlayerIds.length})</Text>
               </Pressable>
+            </View>
+          ) : null}
+
+          {phase === 'setup' && isOnline && !isHost ? (
+            <View style={styles.panel}>
+              <Text style={styles.panelTitle}>In attesa dell'host</Text>
+              <Text style={styles.helperText}>La partita partirà appena l'host avvia il tavolo.</Text>
             </View>
           ) : null}
 
@@ -834,7 +849,7 @@ export default function App() {
           <View style={styles.handHeader}>
             <Text style={styles.sectionLabel}>La tua mano</Text>
             <Text style={styles.helperText}>
-              {!activePlayerIds.includes(0)
+              {!activePlayerIds.includes(localPlayerId)
                 ? 'Sei eliminato'
                 : isHumanTurn
                   ? 'Tocca a te'
@@ -845,14 +860,15 @@ export default function App() {
                       : 'Chiamata aperta'}
             </Text>
           </View>
-          <View style={styles.hand}>
+          <View style={[styles.hand, isPhoneLayout && styles.handPhone]}>
             {human?.cards.map((card) =>
               isBlindOneCardBid ? (
-                <CardView key={`${card.value}-${card.suit}`} hidden />
+                <CardView key={`${card.value}-${card.suit}`} hidden compact={isPhoneLayout} />
               ) : (
                 <CardView
                   key={`${card.value}-${card.suit}`}
                   card={card}
+                  compact={isPhoneLayout}
                   disabled={!isHumanTurn}
                   selected={selectedJoker ? selectedJoker.value === card.value && selectedJoker.suit === card.suit : false}
                   onPress={() => (isJoker(card) ? setSelectedJoker(card) : playHumanCard(card))}
@@ -901,29 +917,51 @@ function ScoreBlock({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#111827',
+    backgroundColor: '#0b1116',
   },
   screen: {
     flexGrow: 1,
     padding: 18,
-    gap: 14,
+    gap: 16,
+    backgroundColor: '#0b1116',
+  },
+  screenPhone: {
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    gap: 12,
   },
   header: {
-    minHeight: 58,
+    minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  headerPhone: {
+    minHeight: 56,
+  },
+  headerText: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
   },
   kicker: {
-    color: '#facc15',
+    color: '#f6c75a',
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '900',
     textTransform: 'uppercase',
   },
   title: {
-    color: '#f9fafb',
-    fontSize: 28,
+    color: '#fff7df',
+    fontSize: 30,
     fontWeight: '900',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  titlePhone: {
+    fontSize: 23,
+    lineHeight: 28,
   },
   iconButton: {
     width: 44,
@@ -931,23 +969,37 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#374151',
+    backgroundColor: '#1f2933',
+    borderWidth: 1,
+    borderColor: '#44515f',
+    shadowColor: '#000',
+    shadowOpacity: 0.32,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   iconText: {
-    color: '#f9fafb',
+    color: '#f8d874',
     fontSize: 24,
     fontWeight: '900',
   },
   scoreBand: {
-    minHeight: 78,
+    minHeight: 82,
     borderRadius: 8,
-    backgroundColor: '#f9fafb',
+    backgroundColor: '#141b22',
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 7,
-    padding: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#3a4651',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 4,
   },
   scoreBlock: {
     minWidth: 72,
@@ -955,47 +1007,93 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: '#202a33',
     paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#46535f',
   },
   activeScoreBlock: {
-    backgroundColor: '#facc15',
+    backgroundColor: '#7f1d1d',
+    borderColor: '#f6c75a',
+    shadowColor: '#f6c75a',
+    shadowOpacity: 0.32,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 5,
   },
   scoreLabel: {
-    color: '#6b7280',
+    color: '#bac6d0',
     fontSize: 11,
     fontWeight: '800',
     textTransform: 'uppercase',
   },
   scoreValue: {
-    color: '#111827',
+    color: '#fff7df',
     fontSize: 20,
     fontWeight: '900',
   },
   table: {
-    borderRadius: 8,
-    backgroundColor: '#0f766e',
-    padding: 14,
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 44,
+    backgroundColor: '#681c1b',
+    padding: 18,
     gap: 14,
-    borderWidth: 1,
-    borderColor: '#14b8a6',
+    borderWidth: 5,
+    borderColor: '#2a1513',
+    shadowColor: '#000',
+    shadowOpacity: 0.36,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
+  tablePhone: {
+    borderRadius: 30,
+    borderWidth: 4,
+    padding: 11,
+    gap: 11,
+  },
+  tableFelt: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    top: 14,
+    bottom: 14,
+    borderRadius: 34,
+    backgroundColor: '#0b6b52',
+    borderWidth: 2,
+    borderColor: '#19a579',
+    opacity: 0.95,
+  },
+  tableFeltPhone: {
+    left: 9,
+    right: 9,
+    top: 9,
+    bottom: 9,
+    borderRadius: 22,
   },
   panel: {
+    position: 'relative',
     borderRadius: 8,
-    padding: 12,
-    backgroundColor: '#134e4a',
+    padding: 14,
+    backgroundColor: 'rgba(8, 35, 31, 0.88)',
     gap: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(246, 199, 90, 0.22)',
   },
   matchPanel: {
+    position: 'relative',
     borderRadius: 8,
     padding: 12,
-    backgroundColor: '#115e59',
+    backgroundColor: 'rgba(7, 50, 42, 0.78)',
     gap: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
   visibleCardsPanel: {
     borderRadius: 8,
     padding: 10,
-    backgroundColor: '#0f766e',
+    backgroundColor: 'rgba(5, 83, 64, 0.78)',
     gap: 10,
   },
   visibleCardsGrid: {
@@ -1007,7 +1105,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   panelTitle: {
-    color: '#f9fafb',
+    color: '#fff7df',
     fontSize: 18,
     fontWeight: '900',
   },
@@ -1022,13 +1120,19 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f9fafb',
+    backgroundColor: '#17212b',
+    borderWidth: 1,
+    borderColor: '#46535f',
   },
   selectedButton: {
-    backgroundColor: '#facc15',
+    backgroundColor: '#f6c75a',
+    borderColor: '#fff1ad',
+  },
+  selectedButtonText: {
+    color: '#111827',
   },
   smallButtonText: {
-    color: '#111827',
+    color: '#fff7df',
     fontSize: 17,
     fontWeight: '900',
   },
@@ -1038,10 +1142,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#facc15',
+    backgroundColor: '#f6c75a',
+    borderWidth: 1,
+    borderColor: '#fff1ad',
   },
   disabledButton: {
-    backgroundColor: '#475569',
+    backgroundColor: '#35414c',
+    borderColor: '#4f5f6d',
   },
   bidButtonText: {
     color: '#111827',
@@ -1057,7 +1164,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#facc15',
+    backgroundColor: '#f6c75a',
+    borderWidth: 1,
+    borderColor: '#fff1ad',
+    shadowColor: '#000',
+    shadowOpacity: 0.24,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   actionText: {
     color: '#111827',
@@ -1070,35 +1184,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f9fafb',
+    backgroundColor: '#17212b',
+    borderWidth: 1,
+    borderColor: '#46535f',
   },
   secondaryText: {
-    color: '#111827',
+    color: '#fff7df',
     fontSize: 15,
     fontWeight: '900',
   },
   helperText: {
-    color: '#d1d5db',
+    color: '#d7e5dd',
     fontSize: 13,
     fontWeight: '600',
   },
   inviteText: {
-    color: '#fef3c7',
+    color: '#ffe69a',
     fontSize: 12,
     fontWeight: '800',
+    lineHeight: 17,
   },
   waitingText: {
-    color: '#f9fafb',
+    color: '#fff7df',
     fontSize: 18,
     fontWeight: '800',
   },
   sectionLabel: {
-    color: '#f9fafb',
+    color: '#f6c75a',
     fontSize: 13,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   trickArea: {
+    position: 'relative',
     minHeight: 170,
     justifyContent: 'center',
     gap: 10,
@@ -1112,7 +1230,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   emptyTrick: {
-    color: '#ccfbf1',
+    color: '#c9f7e5',
     fontSize: 16,
     fontWeight: '700',
   },
@@ -1121,25 +1239,31 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   playedBy: {
-    color: '#ecfeff',
+    color: '#fff7df',
     fontSize: 12,
     fontWeight: '800',
   },
   jokerPanel: {
+    position: 'relative',
     borderRadius: 8,
     padding: 12,
-    backgroundColor: '#164e63',
+    backgroundColor: 'rgba(91, 27, 27, 0.9)',
     gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(246, 199, 90, 0.32)',
   },
   jokerActions: {
     flexDirection: 'row',
     gap: 10,
   },
   resultPanel: {
+    position: 'relative',
     borderRadius: 8,
     padding: 12,
-    backgroundColor: '#134e4a',
+    backgroundColor: 'rgba(8, 35, 31, 0.9)',
     gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(246, 199, 90, 0.22)',
   },
   handSection: {
     gap: 10,
@@ -1151,20 +1275,28 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   hand: {
-    minHeight: 112,
+    minHeight: 128,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  handPhone: {
+    minHeight: 98,
+    gap: 4,
+    paddingVertical: 2,
   },
   history: {
     borderRadius: 8,
-    backgroundColor: '#1f2937',
+    backgroundColor: '#141b22',
     padding: 12,
     gap: 7,
+    borderWidth: 1,
+    borderColor: '#2d3944',
   },
   historyText: {
-    color: '#e5e7eb',
+    color: '#dbe6ee',
     fontSize: 13,
     fontWeight: '600',
   },

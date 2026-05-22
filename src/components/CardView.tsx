@@ -50,6 +50,7 @@ export function CardView({ card, hidden, disabled, selected, compact, label, onP
     <Pressable
       accessibilityRole={onPress ? 'button' : undefined}
       disabled={disabled || !onPress}
+      hitSlop={onPress ? 8 : undefined}
       onPress={onPress}
       style={({ pressed }) => [
         styles.card,
@@ -209,15 +210,15 @@ const styles = StyleSheet.create({
     height: 122,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: '#7f1d1d',
-    backgroundColor: '#fff4d4',
+    borderColor: '#b48834',
+    backgroundColor: '#fff8df',
     padding: 5,
     justifyContent: 'space-between',
     shadowColor: '#000',
-    shadowOpacity: 0.16,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
   },
   cardCompact: {
     width: 42,
@@ -232,20 +233,25 @@ const styles = StyleSheet.create({
     top: 4,
     bottom: 4,
     borderWidth: 1,
-    borderColor: '#d97706',
+    borderColor: '#d9a441',
     borderRadius: 5,
   },
   hidden: {
-    backgroundColor: '#7f1d1d',
-    borderColor: '#facc15',
+    backgroundColor: '#4b1414',
+    borderColor: '#f6c75a',
   },
   selected: {
-    borderColor: '#2563eb',
+    borderColor: '#f6c75a',
     borderWidth: 2,
     transform: [{ translateY: -6 }],
+    shadowColor: '#f6c75a',
+    shadowOpacity: 0.55,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
   },
   disabled: {
-    opacity: 0.48,
+    opacity: 0.52,
   },
   pressed: {
     transform: [{ translateY: -4 }],
@@ -309,7 +315,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fee2b8',
+    backgroundColor: '#fff0c2',
     gap: 3,
   },
   aceMotto: {
@@ -467,7 +473,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fee2b8',
+    backgroundColor: '#fff0c2',
     overflow: 'hidden',
   },
   figureHalf: {
@@ -543,27 +549,29 @@ const styles = StyleSheet.create({
     gap: 7,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#facc15',
-    backgroundColor: '#991b1b',
+    borderColor: '#f6c75a',
+    backgroundColor: '#681c1b',
   },
   backRail: {
     width: '70%',
     height: 3,
     borderRadius: 2,
-    backgroundColor: '#facc15',
+    backgroundColor: '#f6c75a',
   },
   backDiamond: {
     width: 14,
     height: 14,
-    backgroundColor: '#facc15',
+    backgroundColor: '#f6c75a',
     transform: [{ rotate: '45deg' }],
+    borderWidth: 1,
+    borderColor: '#fff1ad',
   },
   backDiamondCompact: {
     width: 10,
     height: 10,
   },
   backText: {
-    color: '#fef3c7',
+    color: '#fff7df',
     fontSize: 11,
     fontWeight: '900',
   },

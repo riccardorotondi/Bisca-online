@@ -1,10 +1,26 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { randomUUID } = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || process.env.BISCA_LOBBY_PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
+const PUBLIC_DIR = path.join(__dirname, '..', 'dist');
 const lobbies = new Map();
+
+const CONTENT_TYPES = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp',
+};
 
 function makeLobbyId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -154,12 +170,27 @@ function leave(ws) {
 const server = http.createServer((req, res) => {
   if (req.url === '/health' || req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, lobbies: lobbies.size }));
+    res.end(JSON.stringify({ ok: true, lobbies: lobbies.size, web: fs.existsSync(PUBLIC_DIR) }));
     return;
   }
 
-  res.writeHead(200, { 'content-type': 'text/plain' });
-  res.end('Bisca lobby server');
+  const requestedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = decodeURIComponent(requestedUrl.pathname);
+  const normalizedPath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
+  const requestedPath = path.join(PUBLIC_DIR, normalizedPath);
+  const indexPath = path.join(PUBLIC_DIR, 'index.html');
+  const filePath = fs.existsSync(requestedPath) && fs.statSync(requestedPath).isFile() ? requestedPath : indexPath;
+
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Bisca lobby server');
+      return;
+    }
+
+    res.writeHead(200, { 'content-type': CONTENT_TYPES[path.extname(filePath)] || 'application/octet-stream' });
+    res.end(data);
+  });
 });
 
 const wss = new WebSocketServer({ server });
